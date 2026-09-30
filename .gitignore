@@ -219,3 +219,4 @@ __marimo__/
 data/*.bak
 data/*.tmp
 library.log
+data/users.json
