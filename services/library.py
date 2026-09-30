@@ -233,4 +233,84 @@ class Library:
         """Return the next unused transaction number."""
         return max((t.transaction_id for t in self.transactions), default=0) + 1
 
-    def
+
+    def _find_active_transaction(self, member_id, book_id):
+        """Return the open (not yet returned) transaction, or None."""
+        for transaction in self.transactions:
+            if (transaction.member_id == member_id
+                    and transaction.book_id == book_id
+                    and not transaction.is_returned()):
+                return transaction
+        return None
+
+    def issue_book(self, member_id, book_id, issue_date=None):
+        """Issue a book to a member and return the new Transaction."""
+        member = self.get_member(member_id)
+        book = self.get_book(book_id)
+
+        if not book.is_available():
+            raise BookNotAvailableError(
+                f"No copies of '{book.title}' are available right now."
+            )
+        member.borrow(book.book_id)  # raises if limit reached or duplicate
+
+        issue_date = issue_date or date.today()
+        due_date = issue_date + timedelta(days=member.loan_days)
+        book.issue_copy()
+
+        transaction = Transaction(
+            self._next_transaction_id(),
+            book.book_id,
+            member.member_id,
+            issue_date,
+            due_date,
+        )
+        self.transactions.append(transaction)
+        self._save()
+        logger.info(
+            "Issued %s to %s (due %s).", book.book_id, member.member_id, due_date
+        )
+        return transaction
+
+    def return_book(self, member_id, book_id, return_date=None):
+        """Return a book, calculate any fine, and return the Transaction."""
+        member = self.get_member(member_id)
+        book = self.get_book(book_id)
+
+        transaction = self._find_active_transaction(
+            member.member_id, book.book_id
+        )
+        if transaction is None:
+            raise InvalidInputError(
+                f"{member.name} has not borrowed book {book.book_id}."
+            )
+
+        transaction.return_date = return_date or date.today()
+        transaction.fine = member.calculate_fine(transaction.days_late())
+        member.return_book(book.book_id)
+        book.return_copy()
+
+        self._save()
+        logger.info(
+            "Returned %s from %s (fine Rs. %s).",
+            book.book_id, member.member_id, transaction.fine,
+        )
+        return transaction
+
+
+    # ------------------------------------------------------------------
+    # Queries used by reports
+    # ------------------------------------------------------------------
+    def active_transactions(self):
+        """Return all transactions where the book is still out."""
+        return [t for t in self.transactions if not t.is_returned()]
+
+    def overdue_transactions(self, on_date=None):
+        """Return all issued books that are past their due date."""
+        return [t for t in self.transactions if t.is_overdue(on_date)]
+
+    def member_history(self, member_id):
+        """Return every transaction (past and present) for one member."""
+        member = self.get_member(member_id)
+        return [t for t in self.transactions if t.member_id == member.member_id]
+    
